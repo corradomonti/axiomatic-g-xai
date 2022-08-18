@@ -84,22 +84,6 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)]
     )
-    
-    for gamma in (0., 10.):
-        with mlflow.start_run():
-            logging.info(f"Gamma = {gamma}")
-            run_experiment(
-                datasets.ErdosRenyi(100, 16, 50),
-                seed=123, #int(np.random.random() * 1000),
-                beta_or_delta='delta',
-                explainer='gnn_explainer',
-                gamma=gamma,
-                kwargs_explainer={'epochs': 1000, 'num_hops': 2},
-                frac_important_feat=0.1,
-                num_samples=10, measure_edges=True,
-                false_as_negatives=False,
-            )
-    return
         
     experiment_id = "axiomatic-benchmark"
     mlflow.set_experiment(experiment_id)
