@@ -1,10 +1,3 @@
-# Qualità
-# Dato un certo beta, l'importanza relativa fra feature è simile al beta.
-#
-# Stabilità
-# 
-# Tenendo fissi beta e delta, aumentando gamma l'importanza [relativa] delle feature non cambia
-
 from betagammadelta import BetaGammaDeltaNet, BetaGammaDeltaTwoHopNet
 
 import numpy as np
