@@ -1,65 +1,18 @@
-from betagammadelta import BetaGammaDeltaNet, BetaGammaDeltaTwoHopNet
+# Qualità
+# Dato un certo beta, l'importanza relativa fra feature è simile al beta.
+#
+# Stabilità
+# 
+# Tenendo fissi beta e delta, aumentando gamma l'importanza [relativa] delle feature non cambia
+
+from whitebox import WhiteboxClassifier, TwoHopClassifier
 
 import numpy as np
-import scipy.stats
 from scipy.stats import binom
 import sklearn.metrics
 import torch
 
 import logging
-    
-def measure_stability(explainer, edge_index, X):
-    _N, D = X.shape
-    edge_index_torch = torch.tensor(edge_index)
-    X_torch = torch.tensor(X)
-            
-    beta = np.zeros(D)
-    delta = np.zeros(D)
-    
-    gamma2feature_importance = dict()
-    for gamma in (0., 0.1, 1., 10., 100.,):
-        model = BetaGammaDeltaNet(
-                        beta=torch.tensor(beta),
-                        gamma=torch.tensor(gamma),
-                        delta=torch.tensor(delta),
-                        x=X_torch,
-                        edge_index=edge_index_torch,
-            )
-            
-        feat_imp, _arcs = explainer(model, X, edge_index)
-        
-        gamma2feature_importance[gamma] = feat_imp
-        # average_feat_importance = np.mean(feat_imp, axis=0)
-        # print(average_feat_importance)
-    
-    feat_imp = np.array(list(gamma2feature_importance.values()))
-    feat_imp = feat_imp / np.sum(feat_imp, axis=2)[:, :, np.newaxis]
-    stability = 1 - np.median(np.std(feat_imp, axis=0).flatten())
-    return stability
-    
-def measure_quality_kendalltau(explainer, edge_index, X, gamma=0., **kwargs):
-    _N, D = X.shape
-    edge_index_torch = torch.tensor(edge_index)
-    X_torch = torch.tensor(X)
-            
-    beta = np.random.randn(D)
-    delta = np.zeros(D)
-    
-    model = BetaGammaDeltaNet(
-                    beta=torch.tensor(beta),
-                    gamma=torch.tensor(gamma),
-                    delta=torch.tensor(delta),
-                    x=X_torch,
-                    edge_index=edge_index_torch,
-        )
-        
-    feat_imp, _arcs = explainer(model, X, edge_index, **kwargs)
-    average_feat_importance = np.mean(feat_imp, axis=0)
-    quality = scipy.stats.kendalltau(np.abs(beta), average_feat_importance)[0]
-    return quality
-    
-BETA = 'beta'
-DELTA = 'delta'
 
 def compute_edge_quality(edge_index, node, original_true_edge_imp, explainer_edge_imp_node, two_hop=False):
     if two_hop:
@@ -100,12 +53,19 @@ def compute_edge_quality(edge_index, node, original_true_edge_imp, explainer_edg
                                  
     return global_score, local_score, weighted_score
 
+LOCAL = 'Local model'
+NEIGHBORHOOD = 'Neighborhood model'
+TWOHOP = 'Two-hop model'
+WHITEBOX_TYPES = {LOCAL, NEIGHBORHOOD, TWOHOP}
+
 def measure_quality(explainer, edge_index, X, nodes_to_explain,
+        whitebox_type,
         measure_edges=False, gamma=0.,
-        beta_or_delta=BETA, frac_important_feat=0.1, frac_important_edge=0.5,
-        two_hop=False, noise=False,
+        frac_important_feat=0.1, frac_important_edge=0.5,
+        two_hop=False,
         **explainer_kwargs):
-    assert beta_or_delta in (BETA, DELTA)
+    
+    assert whitebox_type in WHITEBOX_TYPES
     
     # Preliminaries.
     _, D = X.shape
@@ -125,9 +85,6 @@ def measure_quality(explainer, edge_index, X, nodes_to_explain,
     
     logging.info("Features are on average %.2f important.", np.mean(true_feat_imp))
     
-    beta = true_feat_imp if beta_or_delta == BETA else np.zeros(D)
-    delta = true_feat_imp if beta_or_delta == DELTA else np.zeros(D)
-    
     # Set up true edge importance.
     if measure_edges:
         true_edge_imp = np.random.random(size=(edge_index.shape[1], )) < frac_important_edge
@@ -139,19 +96,18 @@ def measure_quality(explainer, edge_index, X, nodes_to_explain,
         
     assert measure_edges is not None or any(true_edge_imp)
     
-    if measure_edges and beta_or_delta == BETA and gamma == 0.:
+    if measure_edges and whitebox_type == LOCAL and gamma == 0.:
         logging.warning("Measuring edge quality but model does not use edges.")
     
     # Setting up the white-box model and running the explainer on it.
-    Whitebox = BetaGammaDeltaTwoHopNet if two_hop else BetaGammaDeltaNet
+    Whitebox = TwoHopClassifier if whitebox_type == TWOHOP else WhiteboxClassifier
     model = Whitebox(
-                    beta=torch.tensor(beta),
+                    beta=torch.tensor(true_feat_imp),
                     gamma=torch.tensor(gamma),
-                    delta=torch.tensor(delta),
+                    neighborhood=(whitebox_type != LOCAL),
                     edge_imp=(torch.tensor(true_edge_imp) if true_edge_imp is not None else None),
                     x=X_torch,
                     edge_index=edge_index_torch,
-                    noise=noise,
         )
         
     explainer_feat_imp, explainer_edge_imp = explainer(model, X, edge_index, nodes_to_explain, 

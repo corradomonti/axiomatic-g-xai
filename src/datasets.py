@@ -6,18 +6,21 @@ class DatasetLoader:
         raise NotImplementedError()
 
 class SyntheticDataset(DatasetLoader):
-    def __init__(self, num_nodes, mean_degree, num_features):
+    def __init__(self, num_nodes, mean_degree, num_features, frac_positive_feat):
         self.num_nodes = num_nodes
         self.mean_degree = mean_degree
         self.num_features = num_features
+        self.frac_positive_feat = frac_positive_feat
     
     def generate_features(self):
         return np.array(
-            np.random.random(size=(self.num_nodes, self.num_features)) > 0.5, np.float64)
+            np.random.random(size=(self.num_nodes, self.num_features)) <
+            self.frac_positive_feat,
+        np.float64)
     
     def __str__(self):
         return type(self).__name__ + \
-            f"-{self.num_nodes}-nodes-{self.num_features}-features-{self.mean_degree}-degree"
+            f"-{self.num_nodes}-nodes-{self.mean_degree}-degree-{self.num_features}-features-{int(self.frac_positive_feat * 100)}pos"
 
 class ErdosRenyi(SyntheticDataset):
     def generate(self):

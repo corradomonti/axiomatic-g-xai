@@ -44,15 +44,15 @@ def generate_deconvolution(seed=None, **kwargs):
     return generate_captum(Deconvolution, seed=seed, **kwargs)
 
 def generate_lrp(seed=None, **kwargs):
-    import betagammadelta
+    import whitebox
     import captum
 
     captum.attr._core.lrp.SUPPORTED_LAYERS_WITH_RULES[
-        betagammadelta.MeanFeatureLayer
+        whitebox.MeanFeatureLayer
     ] = captum.attr._utils.lrp_rules.EpsilonRule
 
     captum.attr._core.lrp.SUPPORTED_LAYERS_WITH_RULES[
-        betagammadelta.GammaLayer
+        whitebox.DegreeLayer
     ] = captum.attr._utils.lrp_rules.EpsilonRule
     
     return generate_captum(LRP, seed=seed, **kwargs)
@@ -66,7 +66,7 @@ def generate_gnn_explainer(seed=None, **kwargs):
         num_edges = edge_index.shape[1]
         edge_index_torch = torch.tensor(edge_index)
         X_torch = torch.tensor(X)
-        gnnexplainer = tg.nn.models.GNNExplainer(model, return_type="log_prob", log=False, **kwargs)
+        gnnexplainer = tg.nn.models.GNNExplainer(model, return_type="prob", log=False, **kwargs)
         feat_imp = np.full((num_samples, D), np.nan)
         arcs_imp = np.full((num_samples, num_edges), np.nan)
         for sample_idx, node_idx in enumerate(tqdm(nodes_to_explain)):

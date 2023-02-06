@@ -9,6 +9,7 @@ import numpy as np
 import torch_geometric as tg
 
 import logging
+from collections import namedtuple
 import sys
 import traceback
 
@@ -20,12 +21,10 @@ def run_experiment(
         gamma=0.,
         frac_important_feat=0.1,
         frac_important_edge=0.5,
-        beta_or_delta='delta',
+        whitebox_type=measures.LOCAL,
         measure_edges=True,
         seed=123,
         kwargs_explainer=None,
-        two_hop=False,
-        noise=False,
         false_as_negatives=False,
 ):
     kwargs_explainer = dict() if kwargs_explainer is None else kwargs_explainer
@@ -55,17 +54,14 @@ def run_experiment(
     logging.info(f"Generated {len(nodes_to_explain)} nodes to explain%s.",
         "" if len(nodes_to_explain) > 10 else (" " + str(nodes_to_explain)))
     
-    logging.info(f"Measuring quality of {explainer}({kwargs_explainer}) (two_hop={two_hop}, {beta_or_delta})...")
+    logging.info(f"Measuring quality of {explainer}({kwargs_explainer}) with {whitebox_type}...")
     explainer_model = generate_explainer(**kwargs_explainer)
     feat_quality, (global_score, local_score, weighted_score), saved_files = \
         measures.measure_quality(explainer_model,
-            edge_index, X,
+            edge_index, X, whitebox_type=whitebox_type,
             nodes_to_explain=nodes_to_explain,
             measure_edges=measure_edges, gamma=gamma,
-            beta_or_delta=beta_or_delta,
             frac_important_feat=frac_important_feat, frac_important_edge=frac_important_edge,
-            two_hop=two_hop,
-            noise=noise,
         )
     
     mlflow.log_metric('feat_quality', feat_quality)
@@ -85,55 +81,87 @@ def main():
         handlers=[logging.StreamHandler(sys.stdout)]
     )
         
-    experiment_id = "axiomatic-benchmark"
+    experiment_id = "axiomatic-benchmark-42"
     mlflow.set_experiment(experiment_id)
-    for frac_important_feat in (0.5, 0.1):
-        for seed in range(8):
-            for false_as_negatives in (False, True):
-                for num_hops in (2, ):
-                    for dataset in (
-                        datasets.ErdosRenyi(100, mean_degree=16, num_features=50),
-                        datasets.FacebookDataset(),
-                        datasets.ErdosRenyi(100, mean_degree=4, num_features=50),
-                    ):
-                        for two_hop in (True, False):
-                            for explainer, kwargs_explainer in (
-                                    ('graphlime', {'hop': num_hops}),
-                                    ('integrated_gradients', {}),
-                                    ('deconvolution', {}),
-                                    ('lrp', {}),
-                                    ('gnn_explainer', {'epochs': 10, 'num_hops': num_hops}),
-                                    ('gnn_explainer', {'epochs': 100, 'num_hops': num_hops}),
-                                    ('gnn_explainer', {'epochs': 1000, 'num_hops': num_hops}),
-                            ):
-                                for beta_or_delta in ('beta', 'delta'):
-                                    if two_hop and beta_or_delta == 'beta':
-                                        continue
-                                    for gamma in (0., 1., 10., ):
-                                        kwargs_explainer.update({'seed': seed})
-                                        with mlflow.start_run():
-                                            with mlflowutils.logfile_artifact():
-                                                try:
-                                                    run_experiment(
-                                                            dataset=dataset,
-                                                            explainer=explainer,
-                                                            gamma=gamma,
-                                                            beta_or_delta=beta_or_delta,
-                                                            frac_important_feat=frac_important_feat,
-                                                            seed=seed,
-                                                            kwargs_explainer=kwargs_explainer,
-                                                            two_hop=two_hop,
-                                                            false_as_negatives=false_as_negatives,
-                                                    )
-                                                except Exception: # pylint: disable=broad-except
-                                                    mlflow.set_tag('crashed', True)
-                                                    with open("exception.txt", 'w') as _f:
-                                                        traceback.print_exc(file=_f)
-                                                    mlflow.log_artifact("exception.txt")
-                                                    traceback.print_exc()
-                                    
-                                        mlflow.search_runs().to_csv(
-                                            f"../data/{experiment_id}.csv", index=False)
+    
+    EXPLAINER_NUM_HOP = 2
+    explainers_and_kwargs = (
+            ('graphlime', {'hop': EXPLAINER_NUM_HOP}),
+            ('integrated_gradients', {}),
+            ('deconvolution', {}),
+            ('lrp', {}),
+            # ('gnn_explainer', {'epochs': 10, 'num_hops': EXPLAINER_NUM_HOP}),
+            # ('gnn_explainer', {'epochs': 100, 'num_hops': EXPLAINER_NUM_HOP}),
+            ('gnn_explainer', {'epochs': 1000, 'num_hops': EXPLAINER_NUM_HOP}),
+    )
+    
+    Params = namedtuple(
+        'Params', 'real,  pos, imp, false_as_negatives')
+    synth_params = [
+        Params    (False, 0.1, 0.5, False             ),
+        Params    (False, 0.3, 0.5, False             ),
+        Params    (False, 0.5, 0.5, False             ),
+        Params    (False, 0.7, 0.5, False             ),
+        Params    (False, 0.9, 0.5, False             ),
+        Params    (False, 0.5, 0.1, False             ),
+        Params    (False, 0.5, 0.2, False             ),
+        Params    (False, 0.5, 0.3, False             ),
+        Params    (False, 0.5, 0.4, False             ),
+        Params    (False, 0.1, 0.5, True              ),
+        Params    (False, 0.3, 0.5, True              ),
+        Params    (False, 0.5, 0.5, True              ),
+        Params    (False, 0.7, 0.5, True              ),
+        Params    (False, 0.9, 0.5, True              ),
+        Params    (False, 0.5, 0.1, True              ),
+        Params    (False, 0.5, 0.2, True              ),
+        Params    (False, 0.5, 0.3, True              ),
+        Params    (False, 0.5, 0.4, True              ),
+    ]
+    real_params = [
+        Params    (True,  0.5, 0.1, False             ),
+        Params    (True,  0.5, 0.3, False             ),
+        Params    (True,  0.5, 0.5, False             ),
+    ]
+
+    params_seed = (
+        [(p, 42 + seed) for seed in range(4) for p in synth_params] +
+        [(p, 666) for p in real_params]
+    )
+
+    
+    for param, seed in params_seed:
+        if param.real:
+            dataset = datasets.FacebookDataset()
+        else:
+            dataset = datasets.ErdosRenyi(100, mean_degree=16, num_features=50,
+                            frac_positive_feat=param.pos)
+        
+        for explainer, kwargs_explainer in explainers_and_kwargs:
+            for whitebox_type in measures.WHITEBOX_TYPES:
+                kwargs_explainer.update({'seed': seed})
+                with mlflow.start_run():
+                    with mlflowutils.logfile_artifact():
+                        try:
+                            run_experiment(
+                                    dataset=dataset,
+                                    explainer=explainer,
+                                    gamma=1.,
+                                    whitebox_type=whitebox_type,
+                                    frac_important_feat=param.imp,
+                                    frac_important_edge=0.5,
+                                    seed=seed,
+                                    kwargs_explainer=kwargs_explainer,
+                                    false_as_negatives=param.false_as_negatives,
+                            )
+                        except Exception: # pylint: disable=broad-except
+                            mlflow.set_tag('crashed', True)
+                            with open("exception.txt", 'w') as _f:
+                                traceback.print_exc(file=_f)
+                            mlflow.log_artifact("exception.txt")
+                            traceback.print_exc()
+                
+                mlflow.search_runs().to_csv(
+                    f"../data/{experiment_id}.csv", index=False)
     print("Done ✅")
         
 if __name__ == '__main__':

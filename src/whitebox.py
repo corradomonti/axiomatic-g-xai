@@ -69,7 +69,7 @@ class MeanFeatureLayer(MaskedMessagePassing):
         return x_j
 
 
-class GammaLayer(MaskedMessagePassing):
+class DegreeLayer(MaskedMessagePassing):
     def __init__(self, gamma, avg_degree, edge_imp=None):
         super().__init__(edge_imp=edge_imp, aggr="add", flow="source_to_target", node_dim=0)
         # self.gamma = torch.nn.parameter.Parameter(gamma)
@@ -82,7 +82,7 @@ class GammaLayer(MaskedMessagePassing):
     def message_unmasked(self, x_j):
         return (self.gamma / self.avg_degree) * x_j
 
-class BetaGammaDeltaNet(torch.nn.Module):
+class WhiteboxClassifier(torch.nn.Module):
     r"""
     Model that assigns binary class labels to nodes based on their features and on three fixed parameter beta, gamma, and delta. The model is defined by:
     $$
@@ -94,18 +94,15 @@ class BetaGammaDeltaNet(torch.nn.Module):
     where $\sigma$ is a sigmoid centered in y_mean, N is the in-neighborhood, and x are features.
     """
     
-    def __init__(self, beta, gamma, delta, edge_imp=None, x=None,
-        edge_index=None, noise=False):
+    def __init__(self, beta, gamma, neighborhood=False, edge_imp=None, x=None,
+        edge_index=None):
         super().__init__()
         self.beta = beta
         self.gamma = gamma
-        self.delta = delta
-        if noise:
-            self.beta *= torch.randn(self.beta.shape)
-            self.delta *= torch.randn(self.delta.shape)
+        self.neighborhood = neighborhood
         avg_degree = np.bincount(edge_index[0]).mean()
-        self.delta_layer = MeanFeatureLayer(edge_imp)
-        self.gamma_layer = GammaLayer(self.gamma, avg_degree, edge_imp)
+        self.message_passing_layer = MeanFeatureLayer(edge_imp)
+        self.degree_layer = DegreeLayer(self.gamma, avg_degree, edge_imp)
         
         # Calibrate the sigmoid, i.e. we'll use the z-scores of logits.
         y_hat = self.logits(x=x, edge_index=edge_index)
@@ -114,16 +111,18 @@ class BetaGammaDeltaNet(torch.nn.Module):
 
         
     def logits(self, x, edge_index, **kwargs):
-        beta_comp = torch.einsum('d,id->i', self.beta, x).unsqueeze(-1)
-        delta_comp = torch.einsum('d,id->i', self.delta,
-            self.delta_layer(x, edge_index=edge_index, **kwargs)).unsqueeze(-1)
-        #fix to have a gradient
-        degree_input = (x.sum(axis=1)*0+1).unsqueeze(-1)
-        gamma_comp = self.gamma_layer(degree_input, edge_index=edge_index, **kwargs)
-        assert beta_comp.shape == delta_comp.shape == gamma_comp.shape, (
-            f"{beta_comp.shape}, {delta_comp.shape}, {gamma_comp.shape}"
+        if self.neighborhood:
+            feature_comp = torch.einsum('d,id->i', self.beta,
+                self.message_passing_layer(x, edge_index=edge_index, **kwargs)).unsqueeze(-1)
+        else:
+            feature_comp = torch.einsum('d,id->i', self.beta, x).unsqueeze(-1)
+        
+        degree_input = (x.sum(axis=1)*0+1).unsqueeze(-1) # fix to have a gradient
+        degree_comp = self.degree_layer(degree_input, edge_index=edge_index, **kwargs)
+        assert feature_comp.shape == degree_comp.shape, (
+            f"{feature_comp.shape}, {degree_comp.shape}"
         )
-        return beta_comp + gamma_comp + delta_comp
+        return feature_comp + degree_comp
 
     def forward(self, x, edge_index, **kwargs):
         """
@@ -139,22 +138,20 @@ class BetaGammaDeltaNet(torch.nn.Module):
         y_one_hot = torch.vstack([(1 - y), y]).T
         return y_one_hot
 
-class BetaGammaDeltaTwoHopNet(BetaGammaDeltaNet):
+class TwoHopClassifier(WhiteboxClassifier):
     def logits(self, x, edge_index, **kwargs):
-        beta_comp = torch.einsum('d,id->i', self.beta, x).unsqueeze(-1)
-        
-        delta_hid = self.delta_layer(x, edge_index=edge_index, **kwargs)
-        delta_final = self.delta_layer(delta_hid, edge_index=edge_index, **kwargs)
-        delta_comp = torch.einsum('d,id->i', self.delta,
-            delta_final).unsqueeze(-1)
+        feature_hid = self.message_passing_layer(x, edge_index=edge_index, **kwargs)
+        feature_final = self.message_passing_layer(feature_hid, edge_index=edge_index, **kwargs)
+        feature_comp = torch.einsum('d,id->i', self.beta,
+            feature_final).unsqueeze(-1)
         
         #fix to have a gradient
         degree_input = (x.sum(axis=1)*0+1).unsqueeze(-1)
-        gamma_hid = self.gamma_layer(degree_input, edge_index=edge_index, **kwargs)
-        gamma_comp = self.gamma_layer(gamma_hid, edge_index=edge_index, **kwargs)
+        gamma_hid = self.degree_layer(degree_input, edge_index=edge_index, **kwargs)
+        degree_comp = self.degree_layer(gamma_hid, edge_index=edge_index, **kwargs)
         
-        assert beta_comp.shape == delta_comp.shape == gamma_comp.shape, (
-            f"{beta_comp.shape}, {delta_comp.shape}, {gamma_comp.shape}"
+        assert feature_comp.shape == degree_comp.shape, (
+            f"{feature_comp.shape}, {degree_comp.shape}"
         )
-        return beta_comp + gamma_comp + delta_comp
+        return degree_comp + feature_comp
     
